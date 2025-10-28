@@ -1,16 +1,18 @@
 #include "app.h"
-uint8_t *data;
+#include <stdint.h>
+
+
 uint32_t USB_CDC_recieve_data(uint16_t length){
 	uint8_t *data = EndPoint[1].rxBuffer_ptr;
+	uint8_t data1[100];
 	for(uint32_t i = 0; i < length; i++){
-		data[i] = data[i] + 1;
+		data1[i] = data[i];
 	}
 	
-	USB_CDC_send_data(data, length);
+	
+	USB_CDC_send_data(data1, length);
 	return length;
 }
-
-
 
 int main ()
 {
@@ -59,30 +61,15 @@ int main ()
 	
 	USB_OTG_FS_init_pinout();
 	USB_OTG_FS_init_device();
-	
-	
-//	volatile static uint32_t timeout = 0xFFFF;
-	
+
 	__enable_irq ();
 	
-	uint8_t _txBuff[8] = "ASDFG";
+
 
 	while(1)
 	{
 		ODR_Xor(&LED_7);
 		delay_ms(100);
-
-	//EndPoint[1].setTxBuffer(1,_txBuff,8);
-
-		//uint32_t gg = EndPoint[1].rxCallBack;
-		
-
-	data = EndPoint[1].rxBuffer_ptr;
-	for(uint32_t i = 0; i < 2; i++){
-		data[i] = data[i] + 1;
-	}
-//		EndPoint[1].setTxBuffer(1,data,10);
-		
 	}
 	
 	return 0;

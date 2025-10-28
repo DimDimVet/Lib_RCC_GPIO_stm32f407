@@ -898,6 +898,7 @@ uint32_t USB_CDC_transmit_scheduler(){
 }
 
 extern void OTG_FS_IRQHandler(void);
+
 void OTG_FS_IRQHandler(){
 	
 	/**************************************************************/	
