@@ -17,6 +17,7 @@
 #include <string.h>
 #include "stm32f407xx.h"
 #include "stm32f105_usbdfs_macros.h"
+#include "USB_DECRIPT_STM32F407.h"
 
 /***************************************************
  * 			User settings

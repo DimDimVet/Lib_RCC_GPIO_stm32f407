@@ -51,11 +51,9 @@ int main ()
 	RCC_Sysclk_Init(&sysclk, &osc, &pll);
 
 
-//	if(ClockInit() == CLOCK_ERROR){ /* Start HSE, PLL, Flash latency, all the RCC configuration */
-//		NVIC_SystemReset();
-//	}
-	//delay_ms(1000);
-	EnablePeripherals();
+  AHB2_ENABLE_PERIPHERY(RCC_AHB2ENR_OTGFSEN);//включим OTGFS
+
+	
 	__disable_irq ();
 
 	

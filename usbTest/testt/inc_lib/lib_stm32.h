@@ -22,6 +22,7 @@
 /*-----------------------------------------------------------------------------------------------*/
 /*Вкл. периферии*/
 #define AHB1_ENABLE_PERIPHERY(_RCC_PERIPHERY_) (RCC->AHB1ENR |= _RCC_PERIPHERY_)/*вкл что то по AHB1*/
+#define AHB2_ENABLE_PERIPHERY(_RCC_PERIPHERY_) (RCC->AHB2ENR |= _RCC_PERIPHERY_)/*вкл что то по AHB2*/
 #define APB1_ENABLE_PERIPHERY(_RCC_PERIPHERY_) (RCC->APB1ENR |= _RCC_PERIPHERY_)/*вкл что то по APB1*/
 #define APB2_ENABLE_PERIPHERY(_RCC_PERIPHERY_) (RCC->APB2ENR |= _RCC_PERIPHERY_)/*вкл что то по APB2*/
 /*-----------------------------------------------------------------------------------------------*/

@@ -7,9 +7,6 @@
 
 #include <stm32f105_usbdfs_cdc.h>
 #include <stm32f105_usbdfs_macros.h>
-#include "usb_cdc_desc.h"
-
-
 
 /****************************************************************
  * 		RX buffers for Endpoint structure
@@ -796,40 +793,40 @@ void enumerate_Setup(){
 			switch(setup_pkt_data.setup_pkt.wValue){
 				case DESCRIPTOR_TYPE_DEVICE: 				/* Request 0x0680  Value 0x0100 */
 					if(DEVICE_DESCRIPTOR_LENGTH < len) len = DEVICE_DESCRIPTOR_LENGTH;
-					memcpy(&dest, &deviceDescriptor, len);
+					memcpy(&dest, Get_Device_Descriptor(), len);
 					break;
 				case DESCRIPTOR_TYPE_CONFIGURATION: 			/* Request 0x0680  Value 0x0200 */
 					if(CONFIGURATION_DESCRIPTOR_LENGTH < len) len = CONFIGURATION_DESCRIPTOR_LENGTH;
-					memcpy(&dest, &configurationDescriptor, len);
+					memcpy(&dest, Get_Configuration_Descriptor(), len);
 					break;    
 				case DESCRIPTOR_TYPE_DEVICE_QUALIFIER: 			/* Request 0x0680  Value 0x0600 */
 					if(DEVICE_QUALIFIER_LENGTH < len) len = DEVICE_QUALIFIER_LENGTH; 
-					memcpy(&dest, &deviceQualifierDescriptor, len);
+					memcpy(&dest, Get_Device_Qualifier_Descriptor(), len);
 					//	return; /* CUBE MX CDC actually doesn't send any data here */
 					break;          
 				case DESCRIPTOR_TYPE_LANG_STRING: 			/* Request 0x0680  Value 0x0300 */
 					if(LANG_DESCRIPTOR_LENGTH < len) len = LANG_DESCRIPTOR_LENGTH;   
-					memcpy(&dest, &languageStringDescriptor, len);				
+					memcpy(&dest, Get_Language_String_Descriptor(), len);				
 					break; 
 				case DESCRIPTOR_TYPE_MFC_STRING: 			/* Request 0x0680  Value 0x0301 */
 					if(MFC_DESCRIPTOR_LENGTH < len) len = MFC_DESCRIPTOR_LENGTH;
-					memcpy(&dest, &manufactorStringDescriptor, len);				
+					memcpy(&dest, Get_Manufactor_String_Descriptor(), len);				
 					break;
 				case DESCRIPTOR_TYPE_PROD_STRING: 			/* Request 0x0680  Value 0x0302 */
 					if(PRODUCT_DESCRIPTOR_LENGTH < len) len = PRODUCT_DESCRIPTOR_LENGTH;
-					memcpy(&dest, &productStringDescriptor, len);				
+					memcpy(&dest, Get_Product_String_Descriptor(), len);				
 					break;                     
 				case DESCRIPTOR_TYPE_SERIAL_STRING: 			/* Request 0x0680  Value 0x0303 */
 					if(SERIAL_DESCRIPTOR_LENGTH < len) len = SERIAL_DESCRIPTOR_LENGTH;
-					memcpy(&dest, &serialNumberStringDescriptor, len);
+					memcpy(&dest, Get_Serial_Number_String_Descriptor(), len);
 					break;
 				case DESCRIPTOR_TYPE_CONFIGURATION_STRING: 		/* Request 0x0680  Value 0x0304 */
 					if(CONFIG_STRING_LENGTH < len) len = CONFIG_STRING_LENGTH;					
-					memcpy(&dest, &configurationStringDescriptor, len);
+					memcpy(&dest, Get_Configuration_String_Descriptor(), len);
 					break;
 				case DESCRIPTOR_TYPE_INTERFACE_STRING: 			/* Request 0x0680  Value 0x0305 */
 					if(INTERFACE_STRING_LENGTH < len) len = INTERFACE_STRING_LENGTH;
-					memcpy(&dest, &stringInterface, len);
+					memcpy(&dest, Get_String_Interface(), len);
 					break;
 				default:
 					return;

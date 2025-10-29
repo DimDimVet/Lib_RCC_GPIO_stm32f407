@@ -8,7 +8,6 @@
 
 #include "stm32f105_usbdfs_cdc.h"
 #include "stm32f105_usbdfs_macros.h"
-#include "stm32f407_clock.h"
 
 #include <string.h>
 /*-----------------------------------------------------------------------------------------------*/

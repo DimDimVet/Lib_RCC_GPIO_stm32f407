@@ -395,9 +395,9 @@
               <FilePath>.\app\stm32f105_usbdfs_cdc.c</FilePath>
             </File>
             <File>
-              <FileName>stm32f407_clock.c</FileName>
+              <FileName>USB_DECRIPT_STM32F407.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\app\stm32f407_clock.c</FilePath>
+              <FilePath>.\app\USB_DECRIPT_STM32F407.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -440,14 +440,9 @@
               <FilePath>.\inc\stm32f105_usbdfs_macros.h</FilePath>
             </File>
             <File>
-              <FileName>usb_cdc_desc.h</FileName>
+              <FileName>USB_DECRIPT_STM32F407.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\inc\usb_cdc_desc.h</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f407_clock.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\inc\stm32f407_clock.h</FilePath>
+              <FilePath>.\inc\USB_DECRIPT_STM32F407.h</FilePath>
             </File>
           </Files>
         </Group>
