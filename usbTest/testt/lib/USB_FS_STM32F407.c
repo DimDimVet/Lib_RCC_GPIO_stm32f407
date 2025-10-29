@@ -1,12 +1,49 @@
-/****************************************************************
-* STM32F105
-* USB OTG FS device (CDC) implementation
-*
-* Alex Svetlichnyy 2021 svetlal@outlook.com
-*****************************************************************/
+#include "USB_FS_STM32F407.h"
 
-#include <stm32f105_usbdfs_cdc.h>
-#include <stm32f105_usbdfs_macros.h>
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Инициализация USB-port, PA11/USB_DM и PA12/USB_DP*/
+
+void USB_Init_GPIO()
+{
+	AHB1_ENABLE_PERIPHERY(RCC_AHB1ENR_GPIOAEN);/*USB_DM PA11,USB_DP PA12*/
+	
+	GPIO_Structure USB_DM = {.GPIOx = GPIOA,.Pin = PIN11,
+														.Mode = GPIO_MODE_AF,.Speed = GPIO_SPEED_VERY_HIGH,
+														.Pull = GPIO_PUPDR_NOPULL,.Otyper = GPIO_OTYPER_PUSHPULL,
+														.Alternate = GPIO_AF10};
+	
+	GPIO_Init(&USB_DM);
+	
+	GPIO_Structure USB_DP = {.GPIOx = GPIOA,.Pin = PIN12,
+														.Mode = GPIO_MODE_AF,.Speed = GPIO_SPEED_VERY_HIGH,
+														.Pull = GPIO_PUPDR_NOPULL,.Otyper = GPIO_OTYPER_PUSHPULL,
+														.Alternate = GPIO_AF10};
+	
+	GPIO_Init(&USB_DP);
+
+}
+/*-----------------------------------------------------------------------------------------------*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /****************************************************************
  * 		RX buffers for Endpoint structure

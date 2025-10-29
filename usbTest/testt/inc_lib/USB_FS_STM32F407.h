@@ -1,23 +1,18 @@
-#ifndef STM32F105_USBDFS_CDC_H_INCLUDED
-#define STM32F105_USBDFS_CDC_H_INCLUDED
-
-
-/****************************************************************
-* STM32F105
-* USB OTG FS device (CDC) implementation
-*
-* Alex Svetlichnyy 2021 svetlal@outlook.com
-*
-*
-*
-* 02.03.2023 USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);  deleted in USB_CDC_transferTXCallback
-****************************************************************/
-
+#ifndef USB_FS_STM32F407_H_
+#define USB_FS_STM32F407_H_
 
 #include <string.h>
-#include "stm32f407xx.h"
-#include "stm32f105_usbdfs_macros.h"
 #include "USB_DECRIPT_STM32F407.h"
+#include "stm32f407xx.h"
+#include "stm32f4xx.h"
+#include "lib_stm32.h"
+#include "GPIO_STM32F407.h"
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Инициализация USB*/
+
+/*Инициализация USB-port*/
+void USB_Init_GPIO();
 
 /***************************************************
  * 			User settings
@@ -159,7 +154,6 @@ typedef union{
 ***************************************************/
 
 /* init functions */
-void USB_OTG_FS_init_pinout(void);
 void USB_OTG_FS_init_device(void);
 void enumerate_Reset(void);
 void enumerate_Setup(void);
@@ -194,26 +188,34 @@ eLinkState USB_CDC_process_watchdog(void);
 uint32_t getdevstat(void);
 
 
-/***************************************************
-*
-* 			Circular buffer example
-* 			Customize it in the way you need
-*
-***************************************************/
 
-#ifdef USB_CDC_CIRC_BUF_USED
 
-#define CIRC_BUFFER_TX_SIZE USB_CDC_CIRC_BUFFER_SIZE
 
-void write_to_circBuffer(uint8_t *buf, uint16_t len);
 
-typedef struct {
-	uint16_t  index;
-	uint16_t  len;                                                       
-} circBufferAddress;
+
+
+
+#define USB_CLEAR_INTERRUPT(IRQ)    ((USB_OTG_FS->GINTSTS) &= (IRQ))
+#define USB_MASK_INTERRUPT(IRQ)     (USB_OTG_FS->GINTMSK &= ~(IRQ))
+#define USB_UNMASK_INTERRUPT(IRQ)   (USB_OTG_FS->GINTMSK |= (IRQ))
+
+#define CLEAR_IN_EP_INTERRUPT(NUM, IRQ)          (USB_EP_IN(NUM)->DIEPINT = (IRQ))
+#define CLEAR_OUT_EP_INTERRUPT(NUM, IRQ)         (USB_EP_OUT(NUM)->DOEPINT = (IRQ))
+
+#define USB_OTG_DEVICE      		((USB_OTG_DeviceTypeDef *) (USB_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE))
+
+#define USB_EP_OUT(i) 			((USB_OTG_OUTEndpointTypeDef *) ((USB_OTG_FS_PERIPH_BASE +  USB_OTG_OUT_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
+#define USB_EP_IN(i)    		((USB_OTG_INEndpointTypeDef *)	((USB_OTG_FS_PERIPH_BASE + USB_OTG_IN_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
+ 
+ 
+#define USB_OTG_DFIFO(i)    *(__IO uint32_t *)((uint32_t)USB_OTG_FS_PERIPH_BASE  + USB_OTG_FIFO_BASE + (i) * USB_OTG_FIFO_SIZE)
+
+
+typedef struct{
+	__IO uint32_t PCGCCTL;
+}
+USB_OTG_PCGCCTLTypeDef;
+
+#define USB_OTG_PCGCCTL      ((USB_OTG_PCGCCTLTypeDef *)( USB_OTG_FS_PERIPH_BASE + USB_OTG_PCGCCTL_BASE))
 
 #endif
-
-
-
-#endif /* STM32F105_USBDFS_CDC_H_INCLUDED */

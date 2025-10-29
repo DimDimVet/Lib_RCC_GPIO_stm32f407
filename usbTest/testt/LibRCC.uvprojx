@@ -390,11 +390,6 @@
               <FilePath>.\app\app.c</FilePath>
             </File>
             <File>
-              <FileName>stm32f105_usbdfs_cdc.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\app\stm32f105_usbdfs_cdc.c</FilePath>
-            </File>
-            <File>
               <FileName>USB_DECRIPT_STM32F407.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\app\USB_DECRIPT_STM32F407.c</FilePath>
@@ -419,6 +414,11 @@
               <FileType>1</FileType>
               <FilePath>.\lib\RCC_STM32F407.c</FilePath>
             </File>
+            <File>
+              <FileName>USB_FS_STM32F407.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\lib\USB_FS_STM32F407.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -428,16 +428,6 @@
               <FileName>app.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\inc\app.h</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f105_usbdfs_cdc.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\inc\stm32f105_usbdfs_cdc.h</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f105_usbdfs_macros.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\inc\stm32f105_usbdfs_macros.h</FilePath>
             </File>
             <File>
               <FileName>USB_DECRIPT_STM32F407.h</FileName>
@@ -463,6 +453,11 @@
               <FileName>RCC_STM32F407.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\inc_lib\RCC_STM32F407.h</FilePath>
+            </File>
+            <File>
+              <FileName>USB_FS_STM32F407.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\inc_lib\USB_FS_STM32F407.h</FilePath>
             </File>
           </Files>
         </Group>
