@@ -58,7 +58,8 @@ int main ()
 	
 	USB_Init_GPIO();
 	
-	USB_Init_Reg();
+	//USB_Init_Registr();
+	USB_OTG_FS_init_device();
 
 	__enable_irq ();
 	

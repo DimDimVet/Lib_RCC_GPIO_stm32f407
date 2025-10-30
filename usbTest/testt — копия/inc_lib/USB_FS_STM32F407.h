@@ -10,47 +10,9 @@
 
 /*-----------------------------------------------------------------------------------------------*/
 /*Инициализация USB*/
-typedef enum
-	{
-	DEVICE_STATE_DEFAULT = 0,
-	DEVICE_STATE_RESET = 1,
-	DEVICE_STATE_ADDRESSED = 2,
-	DEVICE_STATE_LINECODED = 4,
-	DEVICE_STATE_TX_PR = 8, /* TX transmission active */
-	DEVICE_STATE_TX_FIFO1_ERROR = 16 
-	} eDeviceState;
-
-/*-----------------------------------------------------------------------------------------------*/
-/*Инициализация USB*/
 
 /*Инициализация USB-port*/
 void USB_Init_GPIO();
-/*Инициализация USB-регистров*/
-#define USB_OTG_DEVICE ((USB_OTG_DeviceTypeDef *) (USB_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE))
-void USB_Init_Reg();
-void USB_OTG_FS_init_device();
-
-/*-----------------------------------------------------------------------------------------------*/
-/*Установить размер и смещение FIFO RX и TX для каждого EP*/
-#define RX_FIFO_SIZE (36) 									// 35 - minimum working   / 128
-#define TX_EP0_FIFO_SIZE (16)								// 16 - minimum working  64
-#define TX_EP1_FIFO_SIZE (320-(RX_FIFO_SIZE+TX_EP0_FIFO_SIZE))   // 128
-//#define TX_EP2_FIFO_SIZE		0
-//#define TX_EP3_FIFO_SIZE		0
-	
-void Set_FIFO_EP();
-
-
-
-
-
-
-
-
-
-
-
-
 
 /***************************************************
  * 			User settings
@@ -59,6 +21,12 @@ void Set_FIFO_EP();
 
 #define FLUSH_FIFO_TIMEOUT		2000
 #define DTFXSTS_TIMEOUT 		1024 //TODO
+
+#define RX_FIFO_SIZE			  36 									// 35 - minimum working   / 128
+#define TX_EP0_FIFO_SIZE		16 									// 16 - minimum working  64
+#define TX_EP1_FIFO_SIZE		320-(RX_FIFO_SIZE+TX_EP0_FIFO_SIZE)   // 128
+#define TX_EP2_FIFO_SIZE		0
+#define TX_EP3_FIFO_SIZE		0
 
 #define EP1_DTFXSTS_SIZE    		TX_EP1_FIFO_SIZE	/* TX FIFO empty level */
 #define EP1_MIN_DTFXSTS_LVL		16		/* Minimum TX FIFO empty level */
@@ -89,7 +57,13 @@ in TXCallback, then you send the rest bytes (or ZLP) in next function call. Max 
 /***************************************************
  * 			Device states
 ***************************************************/
-
+typedef enum{
+	DEVICE_STATE_DEFAULT =					0,
+	DEVICE_STATE_RESET =						1,
+	DEVICE_STATE_ADDRESSED =				2,
+	DEVICE_STATE_LINECODED =				4,
+	DEVICE_STATE_TX_PR =						8, /* TX transmission active */
+	DEVICE_STATE_TX_FIFO1_ERROR =		16 } eDeviceState;
 
 	typedef enum{
 	LINK_STATE_DEFAULT =							0, 
@@ -180,7 +154,7 @@ typedef union{
 ***************************************************/
 
 /* init functions */
-
+void USB_OTG_FS_init_device(void);
 void enumerate_Reset(void);
 void enumerate_Setup(void);
 // void initEndPoints(void); -> static
@@ -228,7 +202,7 @@ uint32_t getdevstat(void);
 #define CLEAR_IN_EP_INTERRUPT(NUM, IRQ)          (USB_EP_IN(NUM)->DIEPINT = (IRQ))
 #define CLEAR_OUT_EP_INTERRUPT(NUM, IRQ)         (USB_EP_OUT(NUM)->DOEPINT = (IRQ))
 
-
+#define USB_OTG_DEVICE      		((USB_OTG_DeviceTypeDef *) (USB_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE))
 
 #define USB_EP_OUT(i) 			((USB_OTG_OUTEndpointTypeDef *) ((USB_OTG_FS_PERIPH_BASE +  USB_OTG_OUT_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
 #define USB_EP_IN(i)    		((USB_OTG_INEndpointTypeDef *)	((USB_OTG_FS_PERIPH_BASE + USB_OTG_IN_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))

@@ -1,7 +1,5 @@
 #include "USB_FS_STM32F407.h"
 
-/*-----------------------------------------------------------------------------------------------*/
-uint32_t device_state = DEVICE_STATE_DEFAULT; /*Статус USB регистров*/
 
 /*-----------------------------------------------------------------------------------------------*/
 /*Инициализация USB-port, PA11/USB_DM и PA12/USB_DP*/
@@ -27,8 +25,7 @@ void USB_Init_GPIO()
 }
 /*-----------------------------------------------------------------------------------------------*/
 
-/*-----------------------------------------------------------------------------------------------*/
-/*Инициализация USB-port, PA11/USB_DM и PA12/USB_DP*/
+
 
 
 
@@ -76,7 +73,7 @@ static uint8_t lineCoding[CDC_LINE_CODING_LENGTH]={
 };
 
 
-
+static uint32_t device_state = DEVICE_STATE_DEFAULT; /* Device state */
 uint32_t getdevstat(){ return device_state;}
 
 EndPointStruct EndPoint[EP_COUNT];	/* All the Enpoints are included in this array */
@@ -151,22 +148,6 @@ static void initEndPoints(){
 	}	
 }
 
-/*-----------------------------------------------------------------------------------------------*/
-/*Установить размер и смещение FIFO RX и TX для каждого EP*/
-void Set_FIFO_EP()
-{
-	Write_REG(USB_OTG_FS->GRXFSIZ,RX_FIFO_SIZE);/*все EP RX FIFO размер RAM*/
-	Write_REG(USB_OTG_FS->DIEPTXF0_HNPTXFSIZ,((TX_EP0_FIFO_SIZE << 16) | RX_FIFO_SIZE));/*EP0 TX FIFO размер RAM*/
-	Write_REG(USB_OTG_FS->DIEPTXF[0],(((TX_EP1_FIFO_SIZE) << 16) | (RX_FIFO_SIZE+TX_EP0_FIFO_SIZE)));/*EP1 TX FIFO размер RAM*/
-	
-	for(uint32_t i = 1; i < 0x0F ; i++)
-	{
-		Clear_REG(USB_OTG_FS->DIEPTXF[i]);
-	}
-}
-
-
-
 /**
 * brief  Set RX and TX FIFO size and offset for each EP
 * param
@@ -185,70 +166,44 @@ static inline void set_FIFOs_sz(){
 	}
 }
 
-void USB_Init_Reg()
-{
-	device_state = DEVICE_STATE_DEFAULT;
-	
-	Write_REG(USB_OTG_FS->GAHBCFG,USB_OTG_GAHBCFG_GINT);/*Разрешим общее прерыыания регистра USB*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_USBRST);/*Сброс USB*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_SOFM);/*Старт передачи фрейма*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_OEPINT);/*Прерывать OUT endpoints*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_IEPINT);/*Прерывать IN endpoints*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTSTS_RXFLVL);/*RxFIFO пустой*/
-	
-	Write_REG(USB_OTG_FS->GCCFG,USB_OTG_GCCFG_PWRDWN | USB_OTG_GCCFG_NOVBUSSENS);/*Отключение питания и Отключения датчика VBUS*/
-	Write_REG(USB_OTG_DEVICE->DCTL,USB_OTG_DCTL_SDIS);/*Мягкое отключение*/
-	Write_REG(USB_OTG_FS->GUSBCFG,USB_OTG_GUSBCFG_FDMOD | USB_OTG_GUSBCFG_PHYSEL);/*Принудительный периферийный режим и Выбор высокоскоростного последовательного приемопередатчика USB 2.0 ULPI PHY или полноскоростного последовательного приемопередатчика USB 1.1*/
-	
-	//Disable_BIT(USB_OTG_FS->GUSBCFG,(0x0 << 10));/*Время выполнения USB-запроса (согласно AHB и ReferenceManual)*/
-	Enable_BIT(USB_OTG_FS->GUSBCFG,(0x6 << 10));/*Время выполнения USB-запроса (согласно AHB и ReferenceManual)*/
-	
-	Set_FIFO_EP();
-	
-	/*Инициализация 1пакета(3*8 байт) EP0*/
-	Clear_REG(USB_EP_OUT(0)->DOEPTSIZ);
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,(USB_OTG_DOEPTSIZ_PKTCNT & (1 << 19)));/*Счетчик пакета: Это поле уменьшается до нуля после записи пакета в RxFIFO.*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_CDC_MAX_PACKET_SIZE);/*Установить в дескрипторе*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPTSIZ_STUPCNT);/*EP может принять 3 пакета. RM говорит установить STUPCNT = 3*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPCTL_CNAK);/*Очистить NAK*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPCTL_EPENA);/*Включить EP0*/
-	
-	USB_OTG_FS_init_device();
-}
 
+/**
+* brief  Init general settings of USB_OTG periph
+* param
+* param
+* retval
+*/
 void USB_OTG_FS_init_device(){
-//	device_state = DEVICE_STATE_DEFAULT;
-//	USB_OTG_FS->GAHBCFG = USB_OTG_GAHBCFG_GINT; /* Enable Global Interrupt */
+	device_state = DEVICE_STATE_DEFAULT;
+	USB_OTG_FS->GAHBCFG = USB_OTG_GAHBCFG_GINT; /* Enable Global Interrupt */
 //	USB_OTG_FS->GAHBCFG |= USB_OTG_GAHBCFG_TXFELVL;
 //	USB_OTG_FS->GAHBCFG |= USB_OTG_GAHBCFG_PTXFELVL;
 
-//	USB_OTG_FS->GINTMSK = USB_OTG_GINTMSK_USBRST |
-//										//		USB_OTG_GINTMSK_ENUMDNEM |
-//												USB_OTG_GINTMSK_SOFM   |
-//												USB_OTG_GINTMSK_OEPINT |
-//												USB_OTG_GINTMSK_IEPINT |
-//												USB_OTG_GINTSTS_RXFLVL;
+	USB_OTG_FS->GINTMSK = USB_OTG_GINTMSK_USBRST |
+										//		USB_OTG_GINTMSK_ENUMDNEM |
+												USB_OTG_GINTMSK_SOFM   |
+												USB_OTG_GINTMSK_OEPINT |
+												USB_OTG_GINTMSK_IEPINT |
+												USB_OTG_GINTSTS_RXFLVL;
 	
 	/* Enable Global Interrupt for Reset, IN, OUT, RX not empty */
 
 	/* TEC */
-///	USB_OTG_FS->GCCFG = USB_OTG_GCCFG_PWRDWN  | USB_OTG_GCCFG_VBUSBSEN; /* Power up */
-//	USB_OTG_FS->GCCFG = USB_OTG_GCCFG_PWRDWN | USB_OTG_GCCFG_NOVBUSSENS; /* Power up */
-//	USB_OTG_DEVICE->DCTL = USB_OTG_DCTL_SDIS;  /* Soft disconnect */
-	
-	///USB_OTG_PCGCCTL->PCGCCTL = 0;
-	//USB_OTG_FS->GUSBCFG =  USB_OTG_GUSBCFG_FDMOD | USB_OTG_GUSBCFG_PHYSEL; /* Force device mode */
-	
-//	USB_OTG_FS->GUSBCFG &= ~(uint32_t)(0x0FUL << 10UL) ;  /* USB turnaround time (according to AHB and ReferenceManual) */
-//	USB_OTG_FS->GUSBCFG |= (0x6 << 10);
+//	USB_OTG_FS->GCCFG = USB_OTG_GCCFG_PWRDWN  | USB_OTG_GCCFG_VBUSBSEN; /* Power up */
+	USB_OTG_FS->GCCFG = USB_OTG_GCCFG_PWRDWN | USB_OTG_GCCFG_NOVBUSSENS; /* Power up */
+	USB_OTG_DEVICE->DCTL = USB_OTG_DCTL_SDIS;  /* Soft disconnect */
+	USB_OTG_PCGCCTL->PCGCCTL = 0;
+	USB_OTG_FS->GUSBCFG =  USB_OTG_GUSBCFG_FDMOD | USB_OTG_GUSBCFG_PHYSEL; /* Force device mode */
+	USB_OTG_FS->GUSBCFG &= ~(uint32_t)(0x0FUL << 10UL) ;  /* USB turnaround time (according to AHB and ReferenceManual) */
+	USB_OTG_FS->GUSBCFG |= (0x6 << 10);
 
-	//set_FIFOs_sz();
+	set_FIFOs_sz();
 	/* Init  EP0: 1 Packet, 3*8 bytes */
-//	USB_EP_OUT(0)->DOEPTSIZ = 0;
-//	USB_EP_OUT(0)->DOEPTSIZ |= (USB_OTG_DOEPTSIZ_PKTCNT & (1 << 19)); /* This field is decremented to zero after a packet is written into the RxFIFO */
-//	USB_EP_OUT(0)->DOEPTSIZ |= USB_CDC_MAX_PACKET_SIZE; /* Set in descriptor  */
-//	USB_EP_OUT(0)->DOEPTSIZ |= USB_OTG_DOEPTSIZ_STUPCNT;  /* STUPCNT==0x11 means, EP can recieve 3 packets. RM says to set STUPCNT = 3*/
-//	USB_EP_OUT(0)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA); /* Clear NAK and enable EP0 */
+	USB_EP_OUT(0)->DOEPTSIZ = 0;
+	USB_EP_OUT(0)->DOEPTSIZ |= (USB_OTG_DOEPTSIZ_PKTCNT & (1 << 19)); /* This field is decremented to zero after a packet is written into the RxFIFO */
+	USB_EP_OUT(0)->DOEPTSIZ |= USB_CDC_MAX_PACKET_SIZE; /* Set in descriptor  */
+	USB_EP_OUT(0)->DOEPTSIZ |= USB_OTG_DOEPTSIZ_STUPCNT;  /* STUPCNT==0x11 means, EP can recieve 3 packets. RM says to set STUPCNT = 3*/
+	USB_EP_OUT(0)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA); /* Clear NAK and enable EP0 */
 
 	USB_OTG_DEVICE->DCFG |= USB_OTG_DCFG_DSPD_Msk;  /* Device speed - FS */
 	USB_OTG_FS->GINTSTS = 0xFFFFFFFF; /* Reset Global Interrupt status */
