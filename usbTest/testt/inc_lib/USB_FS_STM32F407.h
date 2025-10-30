@@ -9,7 +9,7 @@
 #include "GPIO_STM32F407.h"
 
 /*-----------------------------------------------------------------------------------------------*/
-/*Инициализация USB*/
+/*Статусы USB*/
 typedef enum
 	{
 	DEVICE_STATE_DEFAULT = 0,
@@ -28,7 +28,6 @@ void USB_Init_GPIO();
 /*Инициализация USB-регистров*/
 #define USB_OTG_DEVICE ((USB_OTG_DeviceTypeDef *) (USB_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE))
 void USB_Init_Reg();
-void USB_OTG_FS_init_device();
 
 /*-----------------------------------------------------------------------------------------------*/
 /*Установить размер и смещение FIFO RX и TX для каждого EP*/
@@ -39,6 +38,90 @@ void USB_OTG_FS_init_device();
 //#define TX_EP3_FIFO_SIZE		0
 	
 void Set_FIFO_EP();
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Инициализация EndPoints*/
+typedef struct EndPointStruct{
+	uint16_t status_Rx;
+	uint16_t status_Tx;
+
+	uint16_t rxCounter;
+	uint16_t tx_Counter;
+	
+	uint8_t *rxBuffer_ptr;
+	uint8_t *tx_Buffer_ptr;
+	
+	uint32_t (*tx_Call_Back)(uint8_t EPnum);
+	uint32_t (*rxCallBack)(uint32_t param);
+	uint32_t (*Set_Tx_Buffer)(uint8_t EPnum, uint8_t *tx_Buff, uint16_t len);	
+} EndPointStruct;
+
+/*Статусы EndPoints*/
+#define EP_READY 				0U
+#define EP_BUSY  				1U
+#define EP_ZLP   				2U
+
+extern EndPointStruct EndPoint[];//участвует в обработчике
+
+
+void Init_EP();
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Установка Tx буфера*/
+#define MAX_CDC_EP0_TX_SIZ  		64/*Максимальный размер транзакции TX для EP0. «64» означает, что вы можете отправить максимум один пакет максимального размера
+в TXCallback, затем вы отправляете оставшиеся байты (или ZLP) в следующем вызове функции. Максимальное значение USB_OTG_DIEPTSIZ_XFRSIZ. */
+#define MAX_CDC_EP1_TX_SIZ  		256/*Максимальный размер транзакции TX для EP1. Максимальное значение USB_OTG_DIEPTSIZ_XFRSIZ*/
+
+/*Статусы EndPoints*/
+#define EP_OK					1U
+#define EP_FAILED			0U
+
+#define USB_EP_OUT(i) 			((USB_OTG_OUTEndpointTypeDef *) ((USB_OTG_FS_PERIPH_BASE +  USB_OTG_OUT_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
+#define USB_EP_IN(i)    		((USB_OTG_INEndpointTypeDef *)	((USB_OTG_FS_PERIPH_BASE + USB_OTG_IN_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
+
+#define RX_BUFFER_EP0_SIZE 8U 										/* Enough to set linecoding */
+#define RX_BUFFER_EP1_SIZE 128U
+
+uint32_t USB_Set_Tx_Buffer(uint8_t EPnum, uint8_t *tx_Buff, uint16_t len);
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Загрузить транзакцию TX для определенного EP*/
+
+uint32_t USB_Transfer_TX_Callback(uint8_t EPnum);
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Отправить пакет нулевой длины*/
+
+uint32_t Send_ZLP(uint8_t EPnum);
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Включение EP зависло*/
+uint32_t Endpoint_Enable_Stuck(uint8_t EPnum);
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Если EP IN занята и данные застряли в TX FIFO*/
+uint32_t Recovery_Routine_EP_IN(uint8_t EPnum);
+
+/*-----------------------------------------------------------------------------------------------*/
+/*проверить свободное место в Fifo*/
+uint32_t Check_Free_Space_Fifo(uint8_t dfifo, uint32_t space);
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Функции состояния устройства. Установка/очистка/проверка.*/
+void Set_Device_Status(eDeviceState state);
+void Clear_Device_Status(eDeviceState state);
+uint32_t Check_Device_Status(eDeviceState state);
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -63,28 +146,16 @@ void Set_FIFO_EP();
 #define EP1_DTFXSTS_SIZE    		TX_EP1_FIFO_SIZE	/* TX FIFO empty level */
 #define EP1_MIN_DTFXSTS_LVL		16		/* Minimum TX FIFO empty level */
 
-#define MAX_CDC_EP0_TX_SIZ  		64    /* Max TX transaction size for EP0. "64" means that you can send maximum one packet of max size
-in TXCallback, then you send the rest bytes (or ZLP) in next function call. Max USB_OTG_DIEPTSIZ_XFRSIZ value.     */
-#define MAX_CDC_EP1_TX_SIZ  		256   /* Max TX transaction size for EP1.  Max USB_OTG_DIEPTSIZ_XFRSIZ value.      */
+
 
 #define DOEPT_TRANSFER_SIZE		0x40		/* Value used in DOEPTSIZ for EP1 */
 #define DOEPT_TRANSFER_PCT 		0x01		/* Value used in DOEPTSIZ for EP1 */
 
 
 
-/***************************************************
- * 			EP statuses
-***************************************************/
-#define EP_READY 				0U
-#define EP_BUSY  				1U
-#define EP_ZLP   				2U
 
-/***************************************************
- * 			EP functions return values
-***************************************************/
 
-#define EP_OK					1U
-#define EP_FAILED			0U
+
 
 /***************************************************
  * 			Device states
@@ -136,22 +207,7 @@ in TXCallback, then you send the rest bytes (or ZLP) in next function call. Max 
 * 		Endpoint structure
 ***************************************************/
 
-typedef struct EndPointStruct{
-	uint16_t statusRx;
-	uint16_t statusTx;
 
-	uint16_t rxCounter;
-	uint16_t txCounter;
-	
-	uint8_t *rxBuffer_ptr;
-	uint8_t *txBuffer_ptr;
-	
-	uint32_t (*txCallBack)(uint8_t EPnum);
-	uint32_t (*rxCallBack)(uint32_t param);
-	uint32_t (*setTxBuffer)(uint8_t EPnum, uint8_t *txBuff, uint16_t len);	
-} EndPointStruct; //creating new type
-
-extern EndPointStruct EndPoint[];
 /***************************************************
 *
 * 	Setup packet structure
@@ -192,8 +248,8 @@ void read_Fifo(uint8_t dfifo, uint16_t len);
 // uint32_t DTFXSTS_timeout(uint8_t Epnum, uint32_t dtxfsts_val); -> static
 
 /* Endpoint functions */
-uint32_t USB_CDC_setTxBuffer(uint8_t EPnum, uint8_t *txBuff, uint16_t len);
-uint32_t USB_CDC_transferTXCallback(uint8_t EPnum);
+//uint32_t USB_CDC_setTxBuffer(uint8_t EPnum, uint8_t *txBuff, uint16_t len);
+//uint32_t USB_CDC_transferTXCallback(uint8_t EPnum);
 uint32_t USB_CDC_transferRXCallback_EP0(uint32_t param);
 uint32_t USB_CDC_transferRXCallback_EP1(uint32_t param);
 // inline void toggle_Rx_EP_Status(uint8_t EPnum, uint8_t param);
@@ -203,8 +259,8 @@ uint32_t USB_CDC_transmit_scheduler(void); /* this function monitors if any data
 uint32_t USB_FlushTxFifo(uint32_t EPnum, uint32_t timeout);
 uint32_t USB_FlushRxFifo(uint32_t timeout);
 
-uint32_t check_USB_device_status(eDeviceState state);
-void clear_USB_device_status(eDeviceState state);
+//uint32_t check_USB_device_status(eDeviceState state);
+//void clear_USB_device_status(eDeviceState state);
 
 /* User code functions */
 uint32_t USB_CDC_send_data(uint8_t *txBuff, uint16_t len);
@@ -230,8 +286,7 @@ uint32_t getdevstat(void);
 
 
 
-#define USB_EP_OUT(i) 			((USB_OTG_OUTEndpointTypeDef *) ((USB_OTG_FS_PERIPH_BASE +  USB_OTG_OUT_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
-#define USB_EP_IN(i)    		((USB_OTG_INEndpointTypeDef *)	((USB_OTG_FS_PERIPH_BASE + USB_OTG_IN_ENDPOINT_BASE) + ((i) * USB_OTG_EP_REG_SIZE)))
+
  
  
 #define USB_OTG_DFIFO(i)    *(__IO uint32_t *)((uint32_t)USB_OTG_FS_PERIPH_BASE  + USB_OTG_FIFO_BASE + (i) * USB_OTG_FIFO_SIZE)

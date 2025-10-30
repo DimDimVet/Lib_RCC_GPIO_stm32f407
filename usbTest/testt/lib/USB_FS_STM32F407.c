@@ -2,6 +2,7 @@
 
 /*-----------------------------------------------------------------------------------------------*/
 uint32_t device_state = DEVICE_STATE_DEFAULT; /*Статус USB регистров*/
+EndPointStruct EndPoint[EP_COUNT];	/*Все EP включены в этот массив.*/
 
 /*-----------------------------------------------------------------------------------------------*/
 /*Инициализация USB-port, PA11/USB_DM и PA12/USB_DP*/
@@ -28,7 +29,376 @@ void USB_Init_GPIO()
 /*-----------------------------------------------------------------------------------------------*/
 
 /*-----------------------------------------------------------------------------------------------*/
-/*Инициализация USB-port, PA11/USB_DM и PA12/USB_DP*/
+/*Инициализация USB-регистров*/
+void USB_Init_Reg()
+{
+	device_state = DEVICE_STATE_DEFAULT;
+	
+	Write_REG(USB_OTG_FS->GAHBCFG,USB_OTG_GAHBCFG_GINT);/*Разрешим глобальное прерывание регистра USB*/
+	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_USBRST);/*Сброс USB*/
+	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_SOFM);/*Старт передачи фрейма*/
+	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_OEPINT);/*Прерывать OUT endpoints*/
+	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_IEPINT);/*Прерывать IN endpoints*/
+	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTSTS_RXFLVL);/*RxFIFO пустой*/
+	
+	Write_REG(USB_OTG_FS->GCCFG,USB_OTG_GCCFG_PWRDWN | USB_OTG_GCCFG_NOVBUSSENS);/*Отключение питания и Отключения датчика VBUS*/
+	Write_REG(USB_OTG_DEVICE->DCTL,USB_OTG_DCTL_SDIS);/*Мягкое отключение*/
+	Write_REG(USB_OTG_FS->GUSBCFG,USB_OTG_GUSBCFG_FDMOD | USB_OTG_GUSBCFG_PHYSEL);/*Принудительный периферийный режим и Выбор высокоскоростного последовательного приемопередатчика USB 2.0 ULPI PHY или полноскоростного последовательного приемопередатчика USB 1.1*/
+	
+	//Disable_BIT(USB_OTG_FS->GUSBCFG,(0x0 << 10));/*Время выполнения USB-запроса (согласно AHB и ReferenceManual)*/
+	Enable_BIT(USB_OTG_FS->GUSBCFG,(0x6 << 10));/*Время выполнения USB-запроса (согласно AHB и ReferenceManual)*/
+	
+	Set_FIFO_EP();
+	
+	/*Инициализация 1пакета(3*8 байт) EP0*/
+	Clear_REG(USB_EP_OUT(0)->DOEPTSIZ);
+	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,(USB_OTG_DOEPTSIZ_PKTCNT & (1 << 19)));/*Счетчик пакета: Это поле уменьшается до нуля после записи пакета в RxFIFO.*/
+	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_CDC_MAX_PACKET_SIZE);/*Установить в дескрипторе*/
+	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPTSIZ_STUPCNT);/*EP может принять 3 пакета. RM говорит установить STUPCNT = 3*/
+	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPCTL_CNAK);/*Очистить NAK*/
+	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPCTL_EPENA);/*Включить EP0*/
+	
+	Enable_BIT(USB_OTG_DEVICE->DCFG,USB_OTG_DCFG_DSPD_Msk);/*Скорость USB - FS */
+	Write_REG(USB_OTG_FS->GINTSTS,(0xFFFFFFFF));/*Сбросить статус глобального прерывания*/
+	Disable_BIT(USB_OTG_DEVICE->DCTL,USB_OTG_DCTL_SDIS);/*Отключить - Мягкое отключение*/
+	
+	Init_EP();
+	
+	NVIC_SetPriority(OTG_FS_IRQn, 6);
+	NVIC_EnableIRQ(OTG_FS_IRQn);
+	
+}
+
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Инициализация EndPoints*/
+uint8_t rx_Buffer_Ep0[RX_BUFFER_EP0_SIZE]; /*Полученные данные сохраняются здесь после того, как приложение считывает FIFO. Приёмный FIFO является общим*/
+uint8_t rx_Buffer_Ep1[RX_BUFFER_EP1_SIZE]; /*Полученные данные сохраняются здесь после того, как приложение считывает FIFO. Приёмный FIFO является общим*/
+
+void Init_EP()
+{
+	for(uint32_t i = 0; i < EP_COUNT; i++)
+	{
+		EndPoint[i].status_Rx = EP_READY;
+		EndPoint[i].status_Tx = EP_READY;
+		EndPoint[i].rxCounter = 0;
+		EndPoint[i].tx_Counter = 0;
+		EndPoint[i].Set_Tx_Buffer = &USB_Set_Tx_Buffer;
+		EndPoint[i].tx_Call_Back = &USB_Transfer_TX_Callback;///!!
+				
+		/* EndPoint 0 */
+		if(i==0)
+		{
+			EndPoint[i].rxBuffer_ptr = rx_Buffer_Ep0;/*Буфер RX для EP0*/
+			EndPoint[i].rxCallBack = &USB_CDC_transferRXCallback_EP0;
+		}
+		/* EndPoint 1 */
+		else if(i==1)
+		{
+			EndPoint[i].rxBuffer_ptr = rx_Buffer_Ep1;/*Буфер RX для EP1*/
+			EndPoint[i].rxCallBack = &USB_CDC_transferRXCallback_EP1;
+		}
+		else
+		{
+			EndPoint[i].rxBuffer_ptr = 0; /*добавить поддержку EP2*/
+		}
+	}	
+}
+
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Установка Tx буфера*/
+uint32_t USB_Set_Tx_Buffer(uint8_t EPnum, uint8_t *tx_Buff, uint16_t len)
+{
+	/****************** Предыдущая транзакция не завершена ****************/
+	if((EndPoint[EPnum].tx_Counter != 0) || (EndPoint[EPnum].status_Tx == EP_ZLP) || (Check_Device_Status(DEVICE_STATE_TX_PR) == EP_OK))
+	{				
+		return EP_FAILED;
+	}
+	
+	/************** длина превышает максимальный размер TX в настройках пользователя ****************/
+	uint32_t max_transfer_sz;
+	if(EPnum == 0)
+	{
+		max_transfer_sz = MAX_CDC_EP0_TX_SIZ + (USB_CDC_MAX_PACKET_SIZE - 1);
+	}
+	else 
+	{
+		max_transfer_sz = MAX_CDC_EP1_TX_SIZ + (USB_CDC_MAX_PACKET_SIZE - 1);
+	}
+	
+	if(len > max_transfer_sz)
+	{	
+		return EP_FAILED;
+	}
+	
+	/****************** Все условия в порядке ****************/
+	if(len!=0)
+	{	/*Установить данные для отправки*/	
+		EndPoint[EPnum].tx_Buffer_ptr = tx_Buff;
+		EndPoint[EPnum].tx_Counter = len;
+
+		/*Отправить данные*/		
+		Set_Device_Status(DEVICE_STATE_TX_PR);
+		EndPoint[EPnum].tx_Call_Back(EPnum);
+		
+		return EP_OK;
+	}
+	else
+	{ /*Пакет нулевой длины*/	
+		
+		Clear_REG(USB_EP_IN(EPnum)->DIEPTSIZ);
+
+		Write_REG(USB_EP_IN(EPnum)->DIEPTSIZ,((USB_OTG_DIEPTSIZ_PKTCNT_Msk & (1 << USB_OTG_DIEPTSIZ_PKTCNT_Pos))));/*Один пакет*/
+		Disable_BIT(USB_EP_IN(EPnum)->DIEPTSIZ,USB_OTG_DIEPTSIZ_XFRSIZ_Msk);/*Пакет нулевой длинны*/
+		Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_CNAK);/*Чистим NAK*/
+		Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_EPENA);/*Включить EP*/
+		
+		Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_CNAK);/*Чистим NAK*/
+		Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_EPENA);/*Включить EP*/
+
+		return EP_OK;
+	}
+
+}
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Загрузить транзакцию TX для определенного EP*/
+uint32_t USB_Transfer_TX_Callback(uint8_t EPnum)
+{
+	/****************** Если занят передачей ****************/
+	if(EndPoint[EPnum].status_Tx == EP_BUSY)
+	{
+		Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_CNAK);/*Чистим NAK*/
+		Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_EPENA);/*Включить EP*/
+
+		return EP_FAILED;
+	}
+	
+	/************** EP готов к работе *****************/	
+	/*Нет данных в буфере передачи*/
+	if(EndPoint[EPnum].tx_Counter==0)
+	{
+		if(EndPoint[EPnum].status_Tx == EP_ZLP)
+		{			
+			if(Send_ZLP(EPnum) == EP_OK)
+			{
+				return EP_OK;
+			}
+			else
+			{
+				return EP_FAILED;
+			}
+			
+		}
+		
+		Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_CNAK);/*Чистим NAK*/
+		Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_EPENA);/*Включить EP*/
+	
+		Clear_Device_Status(DEVICE_STATE_TX_PR);
+		
+		EndPoint[EPnum].status_Tx = EP_READY;
+		
+		Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_SNAK);/*Установка NAK*/
+		
+		return EP_OK;
+	}
+	/////!!!!!!!!!!!
+	/****************** Подсчитать количество пакетов *****************/
+	uint16_t max_tx_sz; // max transfer size considering TX FIFO size
+	if(EPnum==0){
+		max_tx_sz = MAX_CDC_EP0_TX_SIZ;
+	}
+	else max_tx_sz = MAX_CDC_EP1_TX_SIZ;
+	
+	/* если размер FIFO составляет 64 байта, а транзакция — 67 байт (DevDescriptor)
+		транзакция будет разделена на две части - первая: длиной 64 байта вторая: длиной 3 байта */
+	uint32_t len;
+	uint32_t residue;
+	uint32_t pct_cnt;
+		
+	if(EndPoint[EPnum].tx_Counter < USB_CDC_MAX_PACKET_SIZE){
+		len = EndPoint[EPnum].tx_Counter;
+		residue = 0;
+		pct_cnt = 1;
+	}
+	else{
+		len = (EndPoint[EPnum].tx_Counter > max_tx_sz) ? max_tx_sz : EndPoint[EPnum].tx_Counter ; 
+		residue = ((len % USB_CDC_MAX_PACKET_SIZE)==0) ? 0 : 1 ;
+		pct_cnt = (uint32_t)((len/USB_CDC_MAX_PACKET_SIZE) + residue);
+	}
+
+	/************** Установить флаг «Занято» и начать передачу *****************/
+
+	EndPoint[EPnum].status_Tx = EP_BUSY;	
+
+	/************** data >= USB_CDC_MAX_PACKET_SIZE *****************/
+
+	if(EndPoint[EPnum].tx_Counter >= USB_CDC_MAX_PACKET_SIZE){  /* counter >= 64 */
+	
+		USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((pct_cnt) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
+		| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((len) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));			/* Max Size */
+		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+		
+		while(write_Fifo(EPnum, EndPoint[EPnum].tx_Buffer_ptr, (uint16_t)len) == EP_FAILED ){
+		
+			Recovery_Routine_EP_IN(EPnum); 
+			USB_EP_IN(EPnum)->DIEPTSIZ = 0;
+			USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((pct_cnt) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
+			| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((len) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));			/* Max Size */
+			USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+			
+			if((EPnum == 1) & Check_Free_Space_Fifo(EPnum, EP1_MIN_DTFXSTS_LVL)){
+				USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);
+			}
+		}			
+		USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);  //TODO delete
+
+		if(EndPoint[EPnum].tx_Counter==0 && residue == 0){ /* was this packet of MaxSize the last one in the queue ? ZLP required? */
+			EndPoint[EPnum].status_Tx = EP_ZLP; /* change EP TX status to ZLP, thereafter ZLP will be sent in sequential function call */
+			while(Endpoint_Enable_Stuck(EPnum) != EP_OK){}
+			Send_ZLP(EPnum);
+			return EP_OK;
+		}
+	}
+	/************** data <  USB_CDC_MAX_PACKET_SIZE *****************/
+
+	else if(EndPoint[EPnum].tx_Counter < USB_CDC_MAX_PACKET_SIZE){
+	
+		USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((1) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
+		| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((uint32_t)(EndPoint[EPnum].tx_Counter) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));	/*  Size */
+		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+
+		while(write_Fifo(EPnum, EndPoint[EPnum].tx_Buffer_ptr, (uint16_t)len) == EP_FAILED ){
+			Recovery_Routine_EP_IN(EPnum); 
+			USB_EP_IN(EPnum)->DIEPTSIZ = 0;
+			USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((1) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
+			| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((uint32_t)(EndPoint[EPnum].tx_Counter) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));			/* Max Size */
+			USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+
+			if((EPnum == 1) & Check_Free_Space_Fifo(EPnum, EP1_MIN_DTFXSTS_LVL)){
+				USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);
+			}
+		}			
+		Clear_Device_Status(DEVICE_STATE_TX_PR);		
+	} 
+		
+	else{
+		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK;		
+	}
+	/************** завершить передачу и установить флаг готовности *****************/
+	USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
+	EndPoint[EPnum].status_Tx = EP_READY;
+	Clear_Device_Status(DEVICE_STATE_TX_PR);
+	return EP_OK;
+}
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Отправить пакет нулевой длины*/
+
+uint32_t Send_ZLP(uint8_t EPnum)
+{
+	Clear_REG(USB_EP_IN(EPnum)->DIEPTSIZ);
+
+	Write_REG(USB_EP_IN(EPnum)->DIEPTSIZ,((USB_OTG_DIEPTSIZ_PKTCNT_Msk & (1 << USB_OTG_DIEPTSIZ_PKTCNT_Pos))));/*Один пакет*/
+	Disable_BIT(USB_EP_IN(EPnum)->DIEPTSIZ,USB_OTG_DIEPTSIZ_XFRSIZ_Msk);/*Пакет нулевой длинны*/
+	Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_CNAK);/*Чистим NAK*/
+	Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_EPENA);/*Включить EP*/
+
+	while(USB_EP_IN(EPnum)->DIEPTSIZ != 0) /* убедитесь, что zlp удален */
+	{
+	
+	}
+
+	Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_CNAK);/*Чистим NAK*/
+	Enable_BIT(USB_EP_OUT(EPnum)->DOEPCTL,USB_OTG_DOEPCTL_EPENA);/*Включить EP*/
+	
+	Clear_Device_Status(DEVICE_STATE_TX_PR);
+
+	EndPoint[EPnum].status_Tx = EP_READY;
+	Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_SNAK);/*Установка NAK*/
+
+	if(Endpoint_Enable_Stuck(EPnum) == EP_OK)
+	{
+		return EP_OK;
+	}
+	else
+	{
+		return EP_FAILED;
+	}
+}
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Включение EP зависло*/
+uint32_t Endpoint_Enable_Stuck(uint8_t EPnum)
+{
+	if((USB_EP_IN(EPnum)->DIEPCTL & USB_OTG_DIEPCTL_EPENA)  & /*EPENA зависло*/
+		!(USB_EP_IN(EPnum)->DIEPTSIZ & USB_OTG_DIEPTSIZ_XFRSIZ) &	/*нет ожидающих данных*/
+		((USB_EP_IN(EPnum)->DIEPTSIZ & USB_OTG_HCTSIZ_PKTCNT) != 0))/*количество ожидающих пакетов*/
+		{		
+			return EP_FAILED;
+		}
+	else
+		{
+			return EP_OK;
+		}	
+}
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*Если EP IN занята и данные застряли в TX FIFO*/
+
+uint32_t Recovery_Routine_EP_IN(uint8_t EPnum)
+{
+	if((EPnum ==1) & (Endpoint_Enable_Stuck(1) == EP_FAILED))
+	{
+		Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_EPDIS);/*Отключить EP*/
+		Enable_BIT(USB_EP_IN(EPnum)->DIEPCTL,USB_OTG_DIEPCTL_SNAK);/*Установка NAK*/
+		Clear_REG(USB_EP_IN(EPnum)->DIEPTSIZ);
+		return EP_OK;
+	}
+	return EP_FAILED;
+}
+
+/*-----------------------------------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------------------------------------*/
+/*проверить свободное место в Fifo*/
+uint32_t Check_Free_Space_Fifo(uint8_t dfifo, uint32_t space)
+{
+	if(USB_EP_IN(dfifo)->DTXFSTS >= space)
+	{
+		return EP_OK;
+	}
+	else return EP_FAILED;
+}
+/*-----------------------------------------------------------------------------------------------*/
+/*Функции состояния устройства. Установка/очистка/проверка.*/
+void Set_Device_Status(eDeviceState state)
+{
+	device_state |= state;
+}
+
+void Clear_Device_Status(eDeviceState state)
+{
+	device_state &= ~state;
+}
+
+uint32_t Check_Device_Status(eDeviceState state)
+{
+	if(device_state & state)
+	{
+		return EP_OK;
+	}
+	else return EP_FAILED;
+}
+
+/*-----------------------------------------------------------------------------------------------*/
 
 
 
@@ -45,25 +415,6 @@ void USB_Init_GPIO()
 
 
 
-
-
-
-/****************************************************************
- * 		RX buffers for Endpoint structure
- * 		May be customized or exluded
-*****************************************************************/
-
-#define RX_BUFFER_EP0_SIZE 8U 										/* Enough to set linecoding */
-#define RX_BUFFER_EP1_SIZE 128U
-
-static uint8_t rxBufferEp0[RX_BUFFER_EP0_SIZE]; /* Recieved data is stored here after application reads DFIFO. RX FIFO is shared */
-static uint8_t rxBufferEp1[RX_BUFFER_EP1_SIZE]; /* Recieved data is stored here after application reads DFIFO. RX FIFO is shared */
-
-/****************************************************************
- * 		LineCoding
- * 		The application has to set linecoding
- * 		according to host requests
-*****************************************************************/
 
 static uint8_t lineCoding[CDC_LINE_CODING_LENGTH]={
 	0x00, 
@@ -79,7 +430,7 @@ static uint8_t lineCoding[CDC_LINE_CODING_LENGTH]={
 
 uint32_t getdevstat(){ return device_state;}
 
-EndPointStruct EndPoint[EP_COUNT];	/* All the Enpoints are included in this array */
+
 
 static USB_setup_req_data setup_pkt_data; /* Setup Packet var */
 
@@ -87,21 +438,10 @@ static USB_setup_req_data setup_pkt_data; /* Setup Packet var */
  * 		static functions' declarations
 *****************************************************************/
 
-/* Device state */
-static inline void set_device_status(eDeviceState state);
-
 
 /* FIFO handlers */
 static inline uint32_t DTFXSTS_timeout(uint8_t Epnum, uint32_t dtxfsts_val);
 
-static inline uint32_t check_free_space_inFifo(uint8_t dfifo, uint32_t space);
-
-static inline uint32_t is_epena_stuck(uint8_t EPnum);
-
-static inline uint32_t recovery_routine_EP_IN (uint8_t EPnum);
-
-/* Init EP */
-static void initEndPoints(void);
 
 static inline void set_FIFOs_sz(void);
 
@@ -110,46 +450,17 @@ static inline uint32_t is_tx_ep_fifo_ready(uint8_t EPnum, uint32_t param);
 
 static inline void toggle_Rx_EP_Status(uint8_t EPnum, uint8_t param);
 
-static uint32_t send_zlp(uint8_t EPnum);
 
 
-/***************************************************
-*
-* 	Initialization functions
-*
-***************************************************/
 
-/**
-* brief  fill endpoint structures with initial data
-* param  
-* param 
-* retval 
-*/
-static void initEndPoints(){
-	for(uint32_t i = 0; i < EP_COUNT; i++){
-		EndPoint[i].statusRx = EP_READY;
-		EndPoint[i].statusTx = EP_READY;
-		EndPoint[i].rxCounter = 0;
-		EndPoint[i].txCounter = 0;
-	//	EndPoint[i].errCode = 0;
-		EndPoint[i].setTxBuffer = &USB_CDC_setTxBuffer;
-		EndPoint[i].txCallBack = &USB_CDC_transferTXCallback;
-				
-		/* EndPoint 0 */
-		if(i==0){
-			EndPoint[i].rxBuffer_ptr = rxBufferEp0;  /* RX Buffer for EP0 */
-			EndPoint[i].rxCallBack = &USB_CDC_transferRXCallback_EP0;
-		}
-		/* EndPoint 1 */
-		else if(i==1){
-			EndPoint[i].rxBuffer_ptr = rxBufferEp1;	/* RX Buffer for EP1 */
-			EndPoint[i].rxCallBack = &USB_CDC_transferRXCallback_EP1;
-		}
-		else{
-			EndPoint[i].rxBuffer_ptr = 0; /* TODO add EP2 support */
-		}
-	}	
-}
+
+
+
+
+
+
+
+
 
 /*-----------------------------------------------------------------------------------------------*/
 /*Установить размер и смещение FIFO RX и TX для каждого EP*/
@@ -185,112 +496,16 @@ static inline void set_FIFOs_sz(){
 	}
 }
 
-void USB_Init_Reg()
-{
-	device_state = DEVICE_STATE_DEFAULT;
-	
-	Write_REG(USB_OTG_FS->GAHBCFG,USB_OTG_GAHBCFG_GINT);/*Разрешим общее прерыыания регистра USB*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_USBRST);/*Сброс USB*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_SOFM);/*Старт передачи фрейма*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_OEPINT);/*Прерывать OUT endpoints*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTMSK_IEPINT);/*Прерывать IN endpoints*/
-	Enable_BIT(USB_OTG_FS->GINTMSK,USB_OTG_GINTSTS_RXFLVL);/*RxFIFO пустой*/
-	
-	Write_REG(USB_OTG_FS->GCCFG,USB_OTG_GCCFG_PWRDWN | USB_OTG_GCCFG_NOVBUSSENS);/*Отключение питания и Отключения датчика VBUS*/
-	Write_REG(USB_OTG_DEVICE->DCTL,USB_OTG_DCTL_SDIS);/*Мягкое отключение*/
-	Write_REG(USB_OTG_FS->GUSBCFG,USB_OTG_GUSBCFG_FDMOD | USB_OTG_GUSBCFG_PHYSEL);/*Принудительный периферийный режим и Выбор высокоскоростного последовательного приемопередатчика USB 2.0 ULPI PHY или полноскоростного последовательного приемопередатчика USB 1.1*/
-	
-	//Disable_BIT(USB_OTG_FS->GUSBCFG,(0x0 << 10));/*Время выполнения USB-запроса (согласно AHB и ReferenceManual)*/
-	Enable_BIT(USB_OTG_FS->GUSBCFG,(0x6 << 10));/*Время выполнения USB-запроса (согласно AHB и ReferenceManual)*/
-	
-	Set_FIFO_EP();
-	
-	/*Инициализация 1пакета(3*8 байт) EP0*/
-	Clear_REG(USB_EP_OUT(0)->DOEPTSIZ);
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,(USB_OTG_DOEPTSIZ_PKTCNT & (1 << 19)));/*Счетчик пакета: Это поле уменьшается до нуля после записи пакета в RxFIFO.*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_CDC_MAX_PACKET_SIZE);/*Установить в дескрипторе*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPTSIZ_STUPCNT);/*EP может принять 3 пакета. RM говорит установить STUPCNT = 3*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPCTL_CNAK);/*Очистить NAK*/
-	Enable_BIT(USB_EP_OUT(0)->DOEPTSIZ,USB_OTG_DOEPCTL_EPENA);/*Включить EP0*/
-	
-	USB_OTG_FS_init_device();
-}
 
-void USB_OTG_FS_init_device(){
-//	device_state = DEVICE_STATE_DEFAULT;
-//	USB_OTG_FS->GAHBCFG = USB_OTG_GAHBCFG_GINT; /* Enable Global Interrupt */
-//	USB_OTG_FS->GAHBCFG |= USB_OTG_GAHBCFG_TXFELVL;
-//	USB_OTG_FS->GAHBCFG |= USB_OTG_GAHBCFG_PTXFELVL;
 
-//	USB_OTG_FS->GINTMSK = USB_OTG_GINTMSK_USBRST |
-//										//		USB_OTG_GINTMSK_ENUMDNEM |
-//												USB_OTG_GINTMSK_SOFM   |
-//												USB_OTG_GINTMSK_OEPINT |
-//												USB_OTG_GINTMSK_IEPINT |
-//												USB_OTG_GINTSTS_RXFLVL;
-	
-	/* Enable Global Interrupt for Reset, IN, OUT, RX not empty */
 
-	/* TEC */
-///	USB_OTG_FS->GCCFG = USB_OTG_GCCFG_PWRDWN  | USB_OTG_GCCFG_VBUSBSEN; /* Power up */
-//	USB_OTG_FS->GCCFG = USB_OTG_GCCFG_PWRDWN | USB_OTG_GCCFG_NOVBUSSENS; /* Power up */
-//	USB_OTG_DEVICE->DCTL = USB_OTG_DCTL_SDIS;  /* Soft disconnect */
-	
-	///USB_OTG_PCGCCTL->PCGCCTL = 0;
-	//USB_OTG_FS->GUSBCFG =  USB_OTG_GUSBCFG_FDMOD | USB_OTG_GUSBCFG_PHYSEL; /* Force device mode */
-	
-//	USB_OTG_FS->GUSBCFG &= ~(uint32_t)(0x0FUL << 10UL) ;  /* USB turnaround time (according to AHB and ReferenceManual) */
-//	USB_OTG_FS->GUSBCFG |= (0x6 << 10);
-
-	//set_FIFOs_sz();
-	/* Init  EP0: 1 Packet, 3*8 bytes */
-//	USB_EP_OUT(0)->DOEPTSIZ = 0;
-//	USB_EP_OUT(0)->DOEPTSIZ |= (USB_OTG_DOEPTSIZ_PKTCNT & (1 << 19)); /* This field is decremented to zero after a packet is written into the RxFIFO */
-//	USB_EP_OUT(0)->DOEPTSIZ |= USB_CDC_MAX_PACKET_SIZE; /* Set in descriptor  */
-//	USB_EP_OUT(0)->DOEPTSIZ |= USB_OTG_DOEPTSIZ_STUPCNT;  /* STUPCNT==0x11 means, EP can recieve 3 packets. RM says to set STUPCNT = 3*/
-//	USB_EP_OUT(0)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA); /* Clear NAK and enable EP0 */
-
-	USB_OTG_DEVICE->DCFG |= USB_OTG_DCFG_DSPD_Msk;  /* Device speed - FS */
-	USB_OTG_FS->GINTSTS = 0xFFFFFFFF; /* Reset Global Interrupt status */
-	USB_OTG_DEVICE->DCTL &= ~USB_OTG_DCTL_SDIS;   /* Soft connect */
-	initEndPoints();
-	
-
-	NVIC_SetPriority(OTG_FS_IRQn, 6);
-	NVIC_EnableIRQ(OTG_FS_IRQn);
-}
 
 /***************************************************
 *
 * 	Miscellaneous service functions
 *
 ***************************************************/
-/**
-* brief  Send Zero Length Packet
-* param
-* param
-* retval OK/FAILED
-*/
 
-static uint32_t send_zlp(uint8_t EPnum){
-	USB_EP_IN(EPnum)->DIEPTSIZ = 0;
-	USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((1) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))); /* One Packet */
-	USB_EP_IN(EPnum)->DIEPTSIZ &= ~USB_OTG_DIEPTSIZ_XFRSIZ_Msk;  /* Zero Length */
-	USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-
-	while(USB_EP_IN(EPnum)->DIEPTSIZ!=0){} /* make sure zlp is gone */
-
-	USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
-	clear_USB_device_status(DEVICE_STATE_TX_PR);
-
-	EndPoint[EPnum].statusTx = EP_READY;
-	USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_SNAK;
-
-	if(is_epena_stuck(EPnum) == EP_OK){
-		return EP_OK;
-	}
-	else return EP_FAILED;
-}
 
  /**
  * brief  Flush TxFifo
@@ -340,8 +555,8 @@ uint32_t USB_FlushRxFifo(uint32_t timeout){
  */
 
 static inline void toggle_Rx_EP_Status(uint8_t EPnum, uint8_t param){
-	if(EndPoint[EPnum].statusRx == param) return;
- 	EndPoint[EPnum].statusRx = param; /* toggle status*/
+	if(EndPoint[EPnum].status_Rx == param) return;
+ 	EndPoint[EPnum].status_Rx = param; /* toggle status*/
 
 	if(param==EP_READY){
 		USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
@@ -383,7 +598,7 @@ void read_Fifo(uint8_t dfifo, uint16_t len){
 
 	/* If unprocessed data length exceeds Max buffer length, it has to be rewritten */
 	if((dfifo == 1) & ((EndPoint[dfifo].rxCounter + len) > RX_BUFFER_EP1_SIZE)){
-		EndPoint[dfifo].rxBuffer_ptr = rxBufferEp1;
+		EndPoint[dfifo].rxBuffer_ptr = rx_Buffer_Ep1;
 		EndPoint[dfifo].rxCounter = 0;
 	}
 	/********************************************************************************/
@@ -423,8 +638,8 @@ uint32_t write_Fifo(uint8_t dfifo, uint8_t *src, uint16_t len){
 	} 
 
 	if(DTFXSTS_timeout(dfifo, dtxfsts_sample)==EP_OK){
-		EndPoint[dfifo].txBuffer_ptr = EndPoint[dfifo].txBuffer_ptr + len;
-		EndPoint[dfifo].txCounter = (uint16_t)(EndPoint[dfifo].txCounter - len);
+		EndPoint[dfifo].tx_Buffer_ptr = EndPoint[dfifo].tx_Buffer_ptr + len;
+		EndPoint[dfifo].tx_Counter = (uint16_t)(EndPoint[dfifo].tx_Counter - len);
 		
 		return EP_OK;	
 	}
@@ -435,179 +650,6 @@ uint32_t write_Fifo(uint8_t dfifo, uint8_t *src, uint16_t len){
 }
 
 
-/***************************************************
-*
-* 		EndPoints' Callbacks
-*
-***************************************************/
-
-/**
-* brief  Continue TX transaction for a certain EP
-* brief  check Endpoint TX status 
-* param  EP number
-* param 
-* retval 
-*/
-uint32_t USB_CDC_transferTXCallback(uint8_t EPnum){ 
-	
-	if(EndPoint[EPnum].statusTx == EP_BUSY){
-		USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);	
-		return EP_FAILED;
-	}
-	/************** EP is ready *****************/	
-	/* No data in TX Buffer */
-	if(EndPoint[EPnum].txCounter==0){
-		if(EndPoint[EPnum].statusTx == EP_ZLP){			
-			if(send_zlp(EPnum) == EP_OK){
-				return EP_OK;
-			}
-			else return EP_FAILED;
-		}
-		USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);	
-		clear_USB_device_status(DEVICE_STATE_TX_PR);			
-		EndPoint[EPnum].statusTx = EP_READY;
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_SNAK;
-		return EP_OK;
-	}
-	
-	/************** Calculate packet(s) count *****************/
-	uint16_t max_tx_sz; // max transfer size considering TX FIFO size
-	if(EPnum==0){
-		max_tx_sz = MAX_CDC_EP0_TX_SIZ;
-	}
-	else max_tx_sz = MAX_CDC_EP1_TX_SIZ;
-	
-	/* if FIFO size is 64 bytes, but transaction is 67 bytes (DevDescriptor)
-	transaction would be split into two parts:
-	first one : with 64 bytes length
-	second one : with 3 bytes length */
-	uint32_t len;
-	uint32_t residue;
-	uint32_t pct_cnt;
-		
-	if(EndPoint[EPnum].txCounter < USB_CDC_MAX_PACKET_SIZE){
-		len = EndPoint[EPnum].txCounter;
-		residue = 0;
-		pct_cnt = 1;
-	}
-	else{
-		len = (EndPoint[EPnum].txCounter > max_tx_sz) ? max_tx_sz : EndPoint[EPnum].txCounter ; 
-		residue = ((len % USB_CDC_MAX_PACKET_SIZE)==0) ? 0 : 1 ;
-		pct_cnt = (uint32_t)((len/USB_CDC_MAX_PACKET_SIZE) + residue);
-	}
-
-	/************** Set Busy flag and start transmission *****************/
-
-	EndPoint[EPnum].statusTx = EP_BUSY;	
-
-	/************** data >= USB_CDC_MAX_PACKET_SIZE *****************/
-
-	if(EndPoint[EPnum].txCounter >= USB_CDC_MAX_PACKET_SIZE){  /* counter >= 64 */
-	
-		USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((pct_cnt) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
-		| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((len) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));			/* Max Size */
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-		
-		while(write_Fifo(EPnum, EndPoint[EPnum].txBuffer_ptr, (uint16_t)len) == EP_FAILED ){
-		
-			recovery_routine_EP_IN(EPnum); 
-			USB_EP_IN(EPnum)->DIEPTSIZ = 0;
-			USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((pct_cnt) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
-			| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((len) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));			/* Max Size */
-			USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-			
-			if((EPnum == 1) & check_free_space_inFifo(EPnum, EP1_MIN_DTFXSTS_LVL)){
-				USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);
-			}
-		}			
-		USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);  //TODO delete
-
-		if(EndPoint[EPnum].txCounter==0 && residue == 0){ /* was this packet of MaxSize the last one in the queue ? ZLP required? */
-			EndPoint[EPnum].statusTx = EP_ZLP; /* change EP TX status to ZLP, thereafter ZLP will be sent in sequential function call */
-			while(is_epena_stuck(EPnum) != EP_OK){}
-			send_zlp(EPnum);
-			return EP_OK;
-		}
-	}
-	/************** data <  USB_CDC_MAX_PACKET_SIZE *****************/
-
-	else if(EndPoint[EPnum].txCounter < USB_CDC_MAX_PACKET_SIZE){
-	
-		USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((1) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
-		| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((uint32_t)(EndPoint[EPnum].txCounter) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));	/*  Size */
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-
-		while(write_Fifo(EPnum, EndPoint[EPnum].txBuffer_ptr, (uint16_t)len) == EP_FAILED ){
-			recovery_routine_EP_IN(EPnum); 
-			USB_EP_IN(EPnum)->DIEPTSIZ = 0;
-			USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((1) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))) /* One Packet */
-			| ((USB_OTG_DIEPTSIZ_XFRSIZ_Msk & ((uint32_t)(EndPoint[EPnum].txCounter) << USB_OTG_DIEPTSIZ_XFRSIZ_Pos)));			/* Max Size */
-			USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-
-			if((EPnum == 1) & check_free_space_inFifo(EPnum, EP1_MIN_DTFXSTS_LVL)){
-				USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);
-			}
-		}			
-	//	USB_FlushTxFifo(1, FLUSH_FIFO_TIMEOUT);  //TODO delete
-		clear_USB_device_status(DEVICE_STATE_TX_PR);		
-	} 
-		
-	else{
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK;		
-	}
-	/************** finish transmission and set Ready flag  *****************/
-	USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
-	EndPoint[EPnum].statusTx = EP_READY;
-	clear_USB_device_status(DEVICE_STATE_TX_PR);
-	return EP_OK;
-}
-
-
-/**
-* brief  Set and start TX transaction
-* param  EP number, TX Buffer, length 
-* param 
-* retval OK/FAILED
-*/
-uint32_t USB_CDC_setTxBuffer(uint8_t EPnum, uint8_t *txBuff, uint16_t len){
-	/************** Previous transaction is not finished ****************/
-	if((EndPoint[EPnum].txCounter != 0) || (EndPoint[EPnum].statusTx == EP_ZLP) || (check_USB_device_status(DEVICE_STATE_TX_PR) == EP_OK)){				
-		return EP_FAILED;
-	}
-
-	/************** length exceeds max TX size in user settings ****************/
-	uint32_t max_transfer_sz;
-	if(EPnum == 0){
-		max_transfer_sz = MAX_CDC_EP0_TX_SIZ + (USB_CDC_MAX_PACKET_SIZE - 1);
-	}
-	else max_transfer_sz = MAX_CDC_EP1_TX_SIZ + (USB_CDC_MAX_PACKET_SIZE - 1);
-	
-	if(len > max_transfer_sz) return EP_FAILED;
-	
-	/************** All conditions are OK ****************/
-	
-	if(len!=0){	/* Set data to send */	
-//		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_SD0PID_SEVNFRM;
-		EndPoint[EPnum].txBuffer_ptr = txBuff;
-		EndPoint[EPnum].txCounter = len;
-
-		/* Send data */			
-		set_device_status(DEVICE_STATE_TX_PR);
-		EndPoint[EPnum].txCallBack(EPnum);
-		
-		return EP_OK;
-	}
-	
-	else{ /* Zero-Length Packet */		
-		USB_EP_IN(EPnum)->DIEPTSIZ = 0;
-		USB_EP_IN(EPnum)->DIEPTSIZ = ((USB_OTG_DIEPTSIZ_PKTCNT_Msk & ((1) << USB_OTG_DIEPTSIZ_PKTCNT_Pos))); /* One Packet */
-		USB_EP_IN(EPnum)->DIEPTSIZ &= ~USB_OTG_DIEPTSIZ_XFRSIZ_Msk;  /* Zero Length */
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-	
-		USB_EP_OUT(EPnum)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
-		return EP_OK;
-	}
-}
 
 /**
 * brief  Perform some action with recieved data (EP0) and refresh EP buffer counter
@@ -620,7 +662,7 @@ uint32_t USB_CDC_setTxBuffer(uint8_t EPnum, uint8_t *txBuff, uint16_t len){
 uint32_t USB_CDC_transferRXCallback_EP0(uint32_t param){
 	uint16_t len = EndPoint[0].rxCounter;	
 	if(len==0) return EP_OK;
-	if(EndPoint[0].statusRx == EP_BUSY) return EP_FAILED;
+	if(EndPoint[0].status_Rx == EP_BUSY) return EP_FAILED;
 	
 	if(param == CDC_SET_LINE_CODING){
 		
@@ -662,7 +704,7 @@ uint32_t USB_CDC_transferRXCallback_EP0(uint32_t param){
 */
 
 __WEAK uint32_t USB_CDC_transferRXCallback_EP1(uint32_t param){
-	if(EndPoint[1].statusRx == EP_BUSY) return EP_FAILED;
+	if(EndPoint[1].status_Rx == EP_BUSY) return EP_FAILED;
 	/* Toggle EP RX status */
 //	toggle_Rx_EP_Status(1, EP_BUSY);
 			
@@ -810,7 +852,7 @@ void enumerate_Setup(){
 			
 		case REQ_TYPE_DEVICE_TO_HOST_SET_ADDRESS: 				/* Request 0x0500  */
 			USB_OTG_DEVICE->DCFG |= (uint32_t)(setup_pkt_data.setup_pkt.wValue << 4);
-			set_device_status(DEVICE_STATE_ADDRESSED);
+			Set_Device_Status(DEVICE_STATE_ADDRESSED);
 			// device_state = DEVICE_STATE_ADDRESSED;
 			break;
 		case REQ_TYPE_DEVICE_TO_HOST_SET_CONFIGURATION: 			/* Request 0x0900  */
@@ -821,7 +863,7 @@ void enumerate_Setup(){
 		case CDC_GET_LINE_CODING: 						/* Request 0x21A1  */
 			if(CDC_LINE_CODING_LENGTH < len) len = CDC_LINE_CODING_LENGTH;
 			memcpy(&dest, &lineCoding, len);
-			set_device_status(DEVICE_STATE_LINECODED);
+			Set_Device_Status(DEVICE_STATE_LINECODED);
 			break;
 		
 		case CDC_SET_LINE_CODING: 						/* Request 0x2021  */
@@ -837,7 +879,7 @@ void enumerate_Setup(){
 			break;
 	} 
 	
-	EndPoint[0].setTxBuffer(0, dest, len);
+	EndPoint[0].Set_Tx_Buffer(0, dest, len);
 }
 
 
@@ -897,7 +939,7 @@ void OTG_FS_IRQHandler(){
 			uint32_t IN_interrupt = USB_EP_IN(0)->DIEPINT; /* Read out EP interrupt bit */
 
 			if(IN_interrupt & USB_OTG_DIEPINT_XFRC){  /* Transfer completed interrupt. */ 
-				EndPoint[0].txCallBack(0);									/* Process TX transmission (if TX buffer is not empty) */
+				EndPoint[0].tx_Call_Back(0);									/* Process TX transmission (if TX buffer is not empty) */
 			}
 			USB_CLEAR_INTERRUPT(USB_OTG_GINTSTS_IEPINT);	
 			CLEAR_IN_EP_INTERRUPT(0, IN_interrupt);
@@ -908,7 +950,7 @@ void OTG_FS_IRQHandler(){
 
 			if(IN_interrupt & USB_OTG_DIEPINT_XFRC){  /* Transfer completed interrupt.*/ 
 
-				EndPoint[1].txCallBack(1);			/* Process TX transmission (if TX buffer is not empty) */
+				EndPoint[1].tx_Call_Back(1);			/* Process TX transmission (if TX buffer is not empty) */
 
 				USB_CLEAR_INTERRUPT(USB_OTG_GINTSTS_IEPINT);	
 				CLEAR_IN_EP_INTERRUPT(1, USB_OTG_DIEPINT_XFRC);			
@@ -1009,61 +1051,7 @@ static inline uint32_t DTFXSTS_timeout(uint8_t Epnum, uint32_t dtxfsts_val){
 	return EP_OK;
 }
 
-static inline uint32_t check_free_space_inFifo(uint8_t dfifo, uint32_t space){
-	if(USB_EP_IN(dfifo)->DTXFSTS >= space){
-		return EP_OK;
-	}
-	else return EP_FAILED;
-}
 
-
-static inline uint32_t is_epena_stuck(uint8_t EPnum){
-	if((USB_EP_IN(EPnum)->DIEPCTL & USB_OTG_DIEPCTL_EPENA)  &  				/* EPENA stuck */
-		!(USB_EP_IN(EPnum)->DIEPTSIZ & USB_OTG_DIEPTSIZ_XFRSIZ) &			/* no data pending */
-		((USB_EP_IN(EPnum)->DIEPTSIZ & USB_OTG_HCTSIZ_PKTCNT) != 0)){		/* packet count pending */
-			
-		return EP_FAILED;
-	}
-	else return EP_OK;
-}
-
-/**
-* brief  If IN endpoint is busy and some data is stuck in TX FIFO 
-* brief  this procedure is called to handle this event
-* param  EP number
-* param  
-* retval 
-*/
-
-static inline uint32_t recovery_routine_EP_IN (uint8_t EPnum){
-	if((EPnum ==1) & (is_epena_stuck (1) == EP_FAILED)){
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_EPDIS;
-		USB_EP_IN(EPnum)->DIEPCTL |= USB_OTG_DIEPCTL_SNAK;
-		USB_EP_IN(EPnum)->DIEPTSIZ =0;			
-		return EP_OK;
-	}
-	return EP_FAILED;
-}
-/**
-* brief  Device status functions. Set/clear/check
-* param  
-* param  
-* retval 
-*/
-static inline void set_device_status(eDeviceState state){
-	device_state |= state;
-}
-
-void clear_USB_device_status(eDeviceState state){
-	device_state &= ~state;
-}
-
-uint32_t check_USB_device_status(eDeviceState state){
-	if(device_state & state){
-		return EP_OK;
-	}
-	else return EP_FAILED;
-}
 
 /**
 * brief  Check if TX FIFO is ready to push there data
@@ -1091,7 +1079,7 @@ static inline uint32_t is_tx_ep_fifo_ready(uint8_t EPnum, uint32_t param){
 * retval OK/FAIL
 */
 eLinkState USB_CDC_process_watchdog(){
-	if(!(check_USB_device_status(DEVICE_STATE_ADDRESSED))) return LINK_STATE_DEFAULT;
+	if(!(Check_Device_Status(DEVICE_STATE_ADDRESSED))) return LINK_STATE_DEFAULT;
 	
 	static uint32_t last_usb_frame_watchdog = 0; 
 	uint32_t current_usb_frame_watchdog = USB_OTG_DEVICE->DSTS & USB_OTG_DSTS_FNSOF_Msk;
@@ -1101,7 +1089,7 @@ eLinkState USB_CDC_process_watchdog(){
 		return LINK_STATE_CONNECTED;
 	}
 	else{
-		clear_USB_device_status(DEVICE_STATE_ADDRESSED);
+		Clear_Device_Status(DEVICE_STATE_ADDRESSED);
 		return LINK_STATE_DISCONNECTED;
 	}
 }
@@ -1117,7 +1105,7 @@ uint32_t USB_CDC_send_data(uint8_t *txBuff, uint16_t len){
 	#ifndef USB_CDC_CIRC_BUF_USED
 	/******* DEVICE_STATE_READY ******/
 	if(is_tx_ep_fifo_ready(1,1) == EP_OK){
-		EndPoint[1].setTxBuffer(1, txBuff, len);
+		EndPoint[1].Set_Tx_Buffer(1, txBuff, len);
 		return EP_OK;
 	}
 	else return EP_FAILED;
